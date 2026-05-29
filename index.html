@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Space Conquest</title>
+    <link rel="stylesheet" href="/styles/main.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="menu-screen" class="screen active">
+        <h1>Space Conquest</h1>
+        <p>Previous score: <span id="previous-score">0</span> waves</p>
+        <button id="new-game-button" type="button">New Game</button>
+      </section>
+
+      <section id="game-screen" class="screen">
+        <div id="hud">
+          <div id="hp-container">
+            <span>HP</span>
+            <div id="hp-bar-bg"><div id="hp-bar"></div></div>
+            <span id="hp-text">100 / 100</span>
+          </div>
+          <div id="wave-counter">Wave: 1</div>
+        </div>
+        <canvas id="game-canvas" width="1024" height="640"></canvas>
+      </section>
+
+      <section id="game-over" class="overlay hidden">
+        <h2>Game Over</h2>
+        <p>Waves survived: <span id="final-score">0</span></p>
+        <button id="back-to-menu" type="button">Back to Menu</button>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
