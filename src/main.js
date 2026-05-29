@@ -11,6 +11,8 @@ const backToMenu = document.getElementById("back-to-menu");
 const hpBar = document.getElementById("hp-bar");
 const hpText = document.getElementById("hp-text");
 const waveCounter = document.getElementById("wave-counter");
+const notification = document.getElementById("notification");
+const pauseOverlay = document.getElementById("pause-overlay");
 const canvas = document.getElementById("game-canvas");
 
 const scoreKey = "space-conquest-previous-score";
@@ -44,6 +46,22 @@ const game = new Game(canvas, {
   },
   updateWave(wave) {
     waveCounter.textContent = `Wave: ${wave}`;
+  },
+  showNotification: (message) => {
+    if (notification) {
+      notification.textContent = message;
+      notification.classList.remove("show");
+      // Trigger reflow to restart animation
+      void notification.offsetWidth;
+      notification.classList.add("show");
+    }
+  },
+  setPaused: (isPaused) => {
+    if (isPaused) {
+      pauseOverlay.classList.remove("hidden");
+    } else {
+      pauseOverlay.classList.add("hidden");
+    }
   },
   onGameOver(score) {
     finalScore.textContent = String(score);

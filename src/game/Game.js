@@ -1,10 +1,11 @@
 import { Cube } from "./entities/Cube.js";
 import { Enemy } from "./entities/Enemy.js";
+import { HPBox } from "./entities/HPBox.js";
 import { Player } from "./entities/Player.js";
 import { Projectile } from "./entities/Projectile.js";
 import { Rock } from "./entities/Rock.js";
 import { Input } from "./systems/Input.js";
-import { ENEMY_TYPES, GAME_HEIGHT, GAME_WIDTH, SPRITES, UPGRADE_TYPES, WAVE_INTERVAL_MS } from "./constants.js";
+import { ENEMY_TYPES, GAME_HEIGHT, GAME_WIDTH, SPRITES, UPGRADE_TYPES, WAVE_INTERVAL_MS, MAX_SPEED_UPGRADES } from "./constants.js";
 import { circleHit, loadSprite, normalize, randomCorner } from "./utils.js";
 
 export class Game {
@@ -30,6 +31,9 @@ export class Game {
     this.lastFrame = 0;
     this.waveTimer = 0;
     this.wavesSurvived = 0;
+    this.lastDifficultyWave = 0;
+    this.cumulativeUpgrades = 0;
+    this.paused = false;
 
     this.reset();
   }
@@ -41,6 +45,7 @@ export class Game {
     this.enemyProjectiles = [];
     this.rocks = [];
     this.cubes = [];
+    this.hpBoxes = [];
     this.waveIndex = 0;
     this.waveTimer = 0;
     this.aoeRing = null;
@@ -70,7 +75,18 @@ export class Game {
     const dt = Math.min(0.033, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
 
-    this.update(dt);
+    // Handle pause toggle
+    if (this.input.isPressed("escape")) {
+      this.paused = !this.paused;
+      if (this.ui && typeof this.ui.setPaused === 'function') {
+        this.ui.setPaused(this.paused);
+      }
+    }
+
+    if (!this.paused) {
+      this.update(dt);
+    }
+    
     this.render();
 
     if (this.player.hp <= 0) {
@@ -89,6 +105,12 @@ export class Game {
       this.spawnWave();
     }
 
+    // Spawn new wave if all enemies are dead
+    if (this.enemies.length === 0 && this.waveIndex > 0) {
+      this.waveTimer = 0;
+      this.spawnWave();
+    }
+
     this.player.update(this.input, dt, this.canvas.width, this.canvas.height);
 
     if (this.input.isPressed(" ", "spacebar") && this.player.canShoot()) {
@@ -103,11 +125,12 @@ export class Game {
       if (circleHit(enemy, this.player)) {
         this.player.takeDamage(enemy.contactDamage * dt);
       }
+    }
 
-      for (const rock of this.rocks) {
-        if (circleHit(enemy, rock)) {
-          this.player.takeDamage(6 * dt);
-        }
+    for (const rock of this.rocks) {
+      rock.update(dt);
+      if (rock.canDamagePlayer && circleHit(rock, this.player)) {
+        this.player.takeDamage(6 * dt);
       }
     }
 
@@ -115,10 +138,41 @@ export class Game {
       cube.update(dt);
       if (circleHit(cube, this.player)) {
         this.player.upgrades[cube.type] += 1;
+        this.cumulativeUpgrades += 1;
+        
+        // Check for 30 upgrade milestone (stackable)
+        if (this.cumulativeUpgrades % 30 === 0) {
+          if (this.ui && typeof this.ui.showNotification === 'function') {
+            this.ui.showNotification("SHIP UPGRADED");
+          }
+          
+          // Increase maxhp by 50
+          this.player.maxHp += 50;
+          this.player.hp = this.player.maxHp;
+          
+          // Reset upgrades except speed (keep speed boost)
+          this.player.upgrades.projectiles = 0;
+          this.player.upgrades.rate = 0;
+          this.player.upgrades.rows = 0;
+          this.player.upgrades.verticalRows = 0;
+          this.player.upgrades.burst = 0;
+          this.player.upgrades.laser = 0;
+          this.player.upgrades.damage = 0;
+        }
+        
         cube.picked = true;
       }
     }
     this.cubes = this.cubes.filter((cube) => !cube.picked);
+
+    for (const hpBox of this.hpBoxes) {
+      hpBox.update(dt);
+      if (circleHit(hpBox, this.player)) {
+        this.player.hp = Math.min(this.player.maxHp, this.player.hp + 25);
+        hpBox.picked = true;
+      }
+    }
+    this.hpBoxes = this.hpBoxes.filter((hpBox) => !hpBox.picked);
 
     this.updateProjectiles(this.playerProjectiles, dt);
     this.updateProjectiles(this.enemyProjectiles, dt);
@@ -152,8 +206,13 @@ export class Game {
         if (!projectile.dead && circleHit(projectile, enemy)) {
           enemy.takeDamage(projectile.damage);
           projectile.dead = true;
-          if (enemy.isDead && Math.random() < 0.28) {
-            this.spawnCube(enemy.x, enemy.y);
+          if (enemy.isDead) {
+            if (Math.random() < 0.28) {
+              this.spawnCube(enemy.x, enemy.y);
+            }
+            if (Math.random() < 0.15) {
+              this.spawnHPBox(enemy.x, enemy.y);
+            }
           }
         }
       }
@@ -180,20 +239,106 @@ export class Game {
   }
 
   shootPlayerProjectiles() {
+    const horizontalRows = 1 + this.player.upgrades.rows;
+    const verticalRows = 1 + this.player.upgrades.verticalRows;
     const count = 1 + this.player.upgrades.projectiles;
-    const totalSpread = Math.min(1.2, 0.1 * (count - 1));
-    for (let i = 0; i < count; i += 1) {
-      const ratio = count === 1 ? 0.5 : i / (count - 1);
-      const angle = -Math.PI / 2 + (ratio - 0.5) * totalSpread;
-      const speed = 390 + this.player.upgrades.speed * 45;
+    const burstMultiplier = this.player.burstActive ? 2 : 1;
+    const finalCount = Math.floor(count * burstMultiplier);
+    
+    const totalSpread = Math.min(1.2, 0.1 * (finalCount - 1));
+    const speed = 390 + this.player.upgrades.speed * 45;
+    
+    // Calculate damage multiplier based on ship upgrades
+    const shipUpgradeCount = Math.floor(this.cumulativeUpgrades / 30);
+    const damageMultiplier = 1 + shipUpgradeCount * 2;
+    
+    // Calculate projectile damage penalty (7% reduction per upgrade, resets on ship upgrade)
+    const projectileDamagePenalty = Math.pow(0.93, this.player.upgrades.projectiles);
+    
+    // Get damage color based on damage upgrade
+    const damageUpgrades = [1, 1.2, 1.5, 2, 3, 5];
+    const damageTier = Math.min(this.player.upgrades.damage, damageUpgrades.length - 1);
+    const damageScale = damageUpgrades[damageTier];
+    const damageColors = ["#66c2ff", "#ffdd61", "#ff9d3d", "#ff5b5b", "#d946ef", "#ffffff"];
+    const projectileColor = damageColors[damageTier];
+    
+    // Horizontal projectiles
+    for (let row = 0; row < horizontalRows; row += 1) {
+      const rowOffset = horizontalRows === 1 ? 0 : (row - (horizontalRows - 1) / 2) * 25;
+      
+      for (let i = 0; i < finalCount; i += 1) {
+        const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
+        const angle = -Math.PI / 2 + (ratio - 0.5) * totalSpread;
+        this.playerProjectiles.push(
+          new Projectile({
+            x: this.player.x + rowOffset,
+            y: this.player.y - this.player.radius,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            radius: 5,
+            damage: 14 * damageScale * projectileDamagePenalty,
+            damageMultiplier: damageMultiplier,
+            color: projectileColor
+          })
+        );
+      }
+    }
+    
+    // Vertical projectiles (both left and right sides with reduced damage)
+    for (let col = 0; col < verticalRows; col += 1) {
+      const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
+      
+      // Left side
+      for (let i = 0; i < finalCount; i += 1) {
+        const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
+        const angle = (ratio - 0.5) * totalSpread;
+        this.playerProjectiles.push(
+          new Projectile({
+            x: this.player.x - this.player.radius + colOffset,
+            y: this.player.y,
+            vx: Math.cos(angle) * speed - 200,
+            vy: Math.sin(angle) * speed - 200,
+            radius: 5,
+            damage: 14 * damageScale * projectileDamagePenalty * 0.3,
+            damageMultiplier: damageMultiplier,
+            color: projectileColor
+          })
+        );
+      }
+      
+      // Right side
+      for (let i = 0; i < finalCount; i += 1) {
+        const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
+        const angle = (ratio - 0.5) * totalSpread;
+        this.playerProjectiles.push(
+          new Projectile({
+            x: this.player.x + this.player.radius + colOffset,
+            y: this.player.y,
+            vx: Math.cos(angle) * speed + 200,
+            vy: Math.sin(angle) * speed - 200,
+            radius: 5,
+            damage: 14 * damageScale * projectileDamagePenalty * 0.3,
+            damageMultiplier: damageMultiplier,
+            color: projectileColor
+          })
+        );
+      }
+    }
+    
+    // Lasers (powerful single projectile)
+    for (let laser = 0; laser < this.player.upgrades.laser; laser += 1) {
+      const laserOffset = this.player.upgrades.laser === 1 ? 0 : (laser - (this.player.upgrades.laser - 1) / 2) * 40;
       this.playerProjectiles.push(
         new Projectile({
-          x: this.player.x,
+          x: this.player.x + laserOffset,
           y: this.player.y - this.player.radius,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed,
-          radius: 5,
-          damage: 14
+          vx: Math.sin(laserOffset / 50) * 100,
+          vy: -500,
+          radius: 8,
+          damage: 50 * damageScale * projectileDamagePenalty,
+          damageMultiplier: damageMultiplier,
+          isLaser: true,
+          color: "#ffff00"
         })
       );
     }
@@ -270,9 +415,18 @@ export class Game {
     this.waveIndex += 1;
     this.wavesSurvived = this.waveIndex;
 
-    const basics = 2 + this.waveIndex;
-    const tanks = Math.floor(this.waveIndex / 2);
-    const shooters = 1 + Math.floor(this.waveIndex / 3);
+    // Check for difficulty increase every 5 waves
+    if (this.waveIndex % 5 === 0 && this.waveIndex !== this.lastDifficultyWave) {
+      this.lastDifficultyWave = this.waveIndex;
+      if (this.ui && typeof this.ui.showNotification === 'function') {
+        this.ui.showNotification("DIFFICULTY INCREASED");
+      }
+    }
+
+    const baseMultiplier = 1 + Math.floor(this.waveIndex / 3) * 0.5;
+    const basics = Math.floor((3 + this.waveIndex) * baseMultiplier);
+    const tanks = Math.floor((1 + Math.floor(this.waveIndex / 2)) * baseMultiplier);
+    const shooters = Math.floor((1 + Math.floor(this.waveIndex / 3)) * baseMultiplier);
 
     for (let i = 0; i < basics; i += 1) this.spawnEnemy(ENEMY_TYPES.BASIC);
     for (let i = 0; i < tanks; i += 1) this.spawnEnemy(ENEMY_TYPES.TANK);
@@ -281,11 +435,34 @@ export class Game {
     if (Math.random() < 0.1 + Math.min(0.15, this.waveIndex * 0.01)) {
       this.spawnEnemy(ENEMY_TYPES.BOSS);
     }
+    
+    // Allow multiple bosses to spawn (1 extra boss every 5 waves)
+    const extraBosses = Math.floor((this.waveIndex - 1) / 5);
+    for (let i = 0; i < extraBosses; i++) {
+      if (Math.random() < 0.5 + this.waveIndex * 0.05) {
+        this.spawnEnemy(ENEMY_TYPES.BOSS);
+      }
+    }
   }
 
   spawnEnemy(type) {
     const corner = randomCorner(this.canvas.width, this.canvas.height);
-    this.enemies.push(new Enemy(type, corner.x, corner.y, this.sprites[type]));
+    const enemy = new Enemy(type, corner.x, corner.y, this.sprites[type]);
+    
+    // Increase enemy HP based on wave
+    let hpMultiplier = 1 + (this.waveIndex - 1) * 0.15;
+    let damageMultiplier = 1;
+    
+    // Every 5 waves, double HP and damage
+    const difficultyLevel = Math.floor(this.waveIndex / 5);
+    damageMultiplier = Math.pow(2, difficultyLevel);
+    hpMultiplier *= damageMultiplier;
+    
+    enemy.hp = Math.floor(enemy.maxHp * hpMultiplier);
+    enemy.maxHp = enemy.hp;
+    enemy.contactDamage *= damageMultiplier;
+    
+    this.enemies.push(enemy);
   }
 
   spawnRock() {
@@ -295,9 +472,13 @@ export class Game {
   }
 
   spawnCube(x, y) {
-    const pool = [UPGRADE_TYPES.PROJECTILES, UPGRADE_TYPES.SPEED, UPGRADE_TYPES.RATE];
+    const pool = [UPGRADE_TYPES.PROJECTILES, UPGRADE_TYPES.SPEED, UPGRADE_TYPES.RATE, UPGRADE_TYPES.ROWS, UPGRADE_TYPES.VERTICAL_ROWS, UPGRADE_TYPES.BURST, UPGRADE_TYPES.LASER, UPGRADE_TYPES.DAMAGE];
     const type = pool[Math.floor(Math.random() * pool.length)];
     this.cubes.push(new Cube(x, y, type));
+  }
+
+  spawnHPBox(x, y) {
+    this.hpBoxes.push(new HPBox(x, y));
   }
 
   updateUI() {
@@ -324,11 +505,19 @@ export class Game {
     this.drawSprite(this.player);
     for (const enemy of this.enemies) this.drawSprite(enemy);
 
-    this.ctx.fillStyle = "#66c2ff";
     for (const p of this.playerProjectiles) {
-      this.ctx.beginPath();
-      this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      this.ctx.fill();
+      this.ctx.fillStyle = p.color || "#66c2ff";
+      if (p.isLaser) {
+        // Draw lasers as glowing rectangles
+        this.ctx.shadowColor = p.color || "#ffff00";
+        this.ctx.shadowBlur = 10;
+        this.ctx.fillRect(p.x - p.radius, p.y - 15, p.radius * 2, 30);
+        this.ctx.shadowBlur = 0;
+      } else {
+        this.ctx.beginPath();
+        this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
     }
 
     this.ctx.fillStyle = "#ff5b6e";
@@ -342,8 +531,26 @@ export class Game {
       this.ctx.save();
       this.ctx.translate(cube.x, cube.y);
       this.ctx.rotate(cube.spin);
-      this.ctx.fillStyle = cube.type === UPGRADE_TYPES.PROJECTILES ? "#61e0ff" : cube.type === UPGRADE_TYPES.SPEED ? "#80ff7f" : "#ffd561";
+      let color = "#ffd561";
+      if (cube.type === UPGRADE_TYPES.PROJECTILES) color = "#61e0ff";
+      else if (cube.type === UPGRADE_TYPES.SPEED) color = "#80ff7f";
+      else if (cube.type === UPGRADE_TYPES.ROWS) color = "#ff80d5";
+      else if (cube.type === UPGRADE_TYPES.RATE) color = "#ffa500";
+      else if (cube.type === UPGRADE_TYPES.VERTICAL_ROWS) color = "#ff1493";
+      else if (cube.type === UPGRADE_TYPES.BURST) color = "#ffd700";
+      else if (cube.type === UPGRADE_TYPES.LASER) color = "#ffff00";
+      else if (cube.type === UPGRADE_TYPES.DAMAGE) color = "#ff69b4";
+      this.ctx.fillStyle = color;
       this.ctx.fillRect(-cube.radius, -cube.radius, cube.radius * 2, cube.radius * 2);
+      this.ctx.restore();
+    }
+
+    for (const hpBox of this.hpBoxes) {
+      this.ctx.save();
+      this.ctx.translate(hpBox.x, hpBox.y);
+      this.ctx.rotate(hpBox.spin);
+      this.ctx.fillStyle = "#ff6b6b";
+      this.ctx.fillRect(-hpBox.radius, -hpBox.radius, hpBox.radius * 2, hpBox.radius * 2);
       this.ctx.restore();
     }
 

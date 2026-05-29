@@ -52,6 +52,13 @@ button {
   gap: 8px;
 }
 
+#keybinds {
+  font-size: 12px;
+  color: #a0a8c0;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
 #hp-bar-bg {
   width: 260px;
   height: 16px;
@@ -72,6 +79,90 @@ button {
   max-width: 1024px;
   border: 2px solid #4f5f96;
   background: #030713;
+}
+
+#notification {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 48px;
+  font-weight: bold;
+  color: #ffda61;
+  text-shadow: 0 0 20px rgba(255, 218, 97, 0.8);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 100;
+}
+
+#notification.show {
+  animation: notificationPulse 2s ease-out;
+}
+
+@keyframes notificationPulse {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+#upgrade-chart {
+  position: absolute;
+  right: 10px;
+  top: 60px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 2px solid #4f5f96;
+  border-radius: 8px;
+  padding: 12px;
+  width: 250px;
+  max-height: 500px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: #a0a8c0;
+  z-index: 50;
+}
+
+#upgrade-chart h3 {
+  margin: 8px 0 6px 0;
+  color: #61e0ff;
+  font-size: 13px;
+}
+
+#upgrade-chart .chart-content {
+  margin-bottom: 12px;
+}
+
+#upgrade-chart p {
+  margin: 4px 0;
+  line-height: 1.4;
+}
+
+#upgrade-chart .upgrade-name {
+  color: #ffd561;
+  font-weight: bold;
+}
+
+#pause-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(3, 7, 19, 0.8);
+  display: grid;
+  place-items: center;
+  z-index: 200;
+  font-size: 48px;
+  text-align: center;
+  gap: 20px;
+}
+
+#pause-overlay.hidden {
+  display: none;
 }
 
 .overlay {

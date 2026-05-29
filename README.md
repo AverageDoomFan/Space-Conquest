@@ -1,7 +1,9 @@
 # Space-Conquest
 
-Open `index.html` in a browser (or serve the folder with a static web server) to play.
+Launch the "start.bat"
+ensure you have python installed
 
 Controls:
 - Move: `ZQSD` or arrow keys
 - Shoot: `Space`
+- Pause: `Escape`

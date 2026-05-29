@@ -14,16 +14,30 @@ export class Player {
     this.upgrades = {
       projectiles: 0,
       speed: 0,
-      rate: 0
+      rate: 0,
+      rows: 0,
+      verticalRows: 0,
+      burst: 0,
+      laser: 0,
+      damage: 0
     };
+    this.burstActive = false;
+    this.burstTimer = 0;
+    this.burstCooldown = 5;
   }
 
   get speed() {
-    return this.baseSpeed + this.upgrades.speed * 35;
+    const cappedSpeedUpgrades = Math.min(this.upgrades.speed, 6);
+    return this.baseSpeed + cappedSpeedUpgrades * 35;
   }
 
   get fireDelay() {
-    return Math.max(0.11, 0.38 - this.upgrades.rate * 0.03);
+    let delay = Math.max(0.11, 0.38 - this.upgrades.rate * 0.03);
+    // During burst, reduce fire delay by 60%
+    if (this.burstActive) {
+      delay *= 0.4;
+    }
+    return delay;
   }
 
   update(input, dt, worldW, worldH) {
@@ -40,6 +54,18 @@ export class Player {
     this.y = clamp(this.y + dir.y * this.speed * dt, this.radius, worldH - this.radius);
 
     this.shootCooldown = Math.max(0, this.shootCooldown - dt);
+    
+    // Update burst state
+    if (this.upgrades.burst > 0) {
+      this.burstTimer += dt;
+      if (this.burstTimer >= this.burstCooldown) {
+        this.burstActive = true;
+        this.burstTimer = 0;
+      }
+      if (this.burstActive && this.burstTimer >= 1) {
+        this.burstActive = false;
+      }
+    }
   }
 
   canShoot() {
