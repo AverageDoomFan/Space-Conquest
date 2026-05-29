@@ -291,13 +291,13 @@ export class Game {
       // Left side
       for (let i = 0; i < finalCount; i += 1) {
         const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
-        const angle = (ratio - 0.5) * totalSpread;
+        const angle = -3 * Math.PI / 4 + (ratio - 0.5) * totalSpread;
         this.playerProjectiles.push(
           new Projectile({
             x: this.player.x - this.player.radius + colOffset,
             y: this.player.y,
-            vx: Math.cos(angle) * speed - 200,
-            vy: Math.sin(angle) * speed - 200,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
             radius: 5,
             damage: 14 * damageScale * projectileDamagePenalty * 0.3,
             damageMultiplier: damageMultiplier,
@@ -309,13 +309,13 @@ export class Game {
       // Right side
       for (let i = 0; i < finalCount; i += 1) {
         const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
-        const angle = (ratio - 0.5) * totalSpread;
+        const angle = -Math.PI / 4 + (ratio - 0.5) * totalSpread;
         this.playerProjectiles.push(
           new Projectile({
             x: this.player.x + this.player.radius + colOffset,
             y: this.player.y,
-            vx: Math.cos(angle) * speed + 200,
-            vy: Math.sin(angle) * speed - 200,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
             radius: 5,
             damage: 14 * damageScale * projectileDamagePenalty * 0.3,
             damageMultiplier: damageMultiplier,
