@@ -24,6 +24,10 @@ export class Enemy {
     this.shootTimer = 0;
     this.secondaryTimer = 0;
     this.aoeTimer = 0;
+    
+    // Aura DoT tracking
+    this.auraDotDuration = 0;
+    this.auraDotTickTimer = 0;
   }
 
   update(player, dt) {
@@ -34,6 +38,11 @@ export class Enemy {
     this.shootTimer = Math.max(0, this.shootTimer - dt);
     this.secondaryTimer = Math.max(0, this.secondaryTimer - dt);
     this.aoeTimer = Math.max(0, this.aoeTimer - dt);
+    
+    // Update aura DoT
+    if (this.auraDotDuration > 0) {
+      this.auraDotDuration -= dt;
+    }
   }
 
   takeDamage(amount) {

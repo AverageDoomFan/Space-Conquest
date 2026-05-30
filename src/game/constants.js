@@ -19,8 +19,27 @@ export const UPGRADE_TYPES = {
   VERTICAL_ROWS: "verticalRows",
   BURST: "burst",
   LASER: "laser",
-  DAMAGE: "damage"
+  DAMAGE: "damage",
+  AURA: "aura",
+  SIZE: "size",
+  RANDOM: "random",
+  PLASMA: "plasma",
+  BOMB: "bomb",
+  DISPEL: "dispel",
+  ARC: "arc",
+  HEADHUNTER: "headhunter",
+  BOUNCE: "bounce",
+  PIERCE: "pierce",
+  CRITICAL_RATE: "criticalRate",
+  CRITICAL_DAMAGE: "criticalDamage"
 };
+
+// Rock respawn time in seconds
+export const ROCK_RESPAWN_TIME = 8;
+// Max upgrades before ship upgrade reset
+export const MAX_UPGRADES_BEFORE_RESET = 50;
+// Permanent upgrades that never reset
+export const PERMANENT_UPGRADE_COUNT = 3;
 
 export const SPRITES = {
   player: "Ressources/Sprites/ship.png",

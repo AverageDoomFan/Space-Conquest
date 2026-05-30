@@ -178,3 +178,88 @@ button {
 .hidden {
   display: none;
 }
+
+#ship-selection {
+  text-align: center;
+}
+
+#ship-selection h1 {
+  margin-bottom: 30px;
+}
+
+.ship-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.ship-option {
+  padding: 16px;
+  background: linear-gradient(135deg, #4876ff 0%, #3d5a99 100%);
+  border: 2px solid #6b96ff;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.ship-option:hover {
+  background: linear-gradient(135deg, #6b96ff 0%, #5a73cc 100%);
+  border-color: #9db5ff;
+  transform: scale(1.05);
+}
+
+.ship-option h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ship-option p {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+#wave-upgrade-selection {
+  z-index: 300;
+}
+
+#wave-upgrade-selection h2 {
+  margin-bottom: 30px;
+  font-size: 28px;
+}
+
+.upgrade-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.upgrade-option {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #ff6b9d 0%, #cc3d6f 100%);
+  border: 2px solid #ff9db5;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.upgrade-option:hover {
+  background: linear-gradient(135deg, #ff9db5 0%, #ff6b9d 100%);
+  border-color: #ffc9d8;
+  transform: scale(1.08);
+}
+
+.upgrade-option:active {
+  transform: scale(0.95);
+}

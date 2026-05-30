@@ -19,8 +19,21 @@ export class Player {
       verticalRows: 0,
       burst: 0,
       laser: 0,
-      damage: 0
+      damage: 0,
+      aura: 0,
+      size: 0,
+      random: 0,
+      plasma: 0,
+      bomb: 0,
+      dispel: 0,
+      arc: 0,
+      headhunter: 0,
+      bounce: 0,
+      pierce: 0,
+      criticalRate: 0,
+      criticalDamage: 0
     };
+    this.permanentUpgrades = []; // Upgrades that never reset
     this.burstActive = false;
     this.burstTimer = 0;
     this.burstCooldown = 5;

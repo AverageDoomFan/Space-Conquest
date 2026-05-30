@@ -14,6 +14,11 @@
         <button id="new-game-button" type="button">New Game</button>
       </section>
 
+      <section id="ship-selection" class="screen hidden">
+        <h1>Choose Your Ship</h1>
+        <div id="ship-options" class="ship-options"></div>
+      </section>
+
       <section id="game-screen" class="screen">
         <div id="hud">
           <div id="hp-container">
@@ -36,16 +41,33 @@
             <p><span class="upgrade-name">Burst:</span> 2x fire every 5s</p>
             <p><span class="upgrade-name">Laser:</span> Powerful beam</p>
             <p><span class="upgrade-name">Damage:</span> Color scaling</p>
+            <p><span class="upgrade-name">Aura:</span> DoT circle around player</p>
+            <p><span class="upgrade-name">Size:</span> Larger projectiles</p>
+            <p><span class="upgrade-name">Random:</span> Shoots everywhere (tiny)</p>
+            <p><span class="upgrade-name">Plasma:</span> Big slow + DoT</p>
+            <p><span class="upgrade-name">Bomb:</span> Explodes on contact</p>
+            <p><span class="upgrade-name">Dispel:</span> Removes enemy projectiles</p>
+            <p><span class="upgrade-name">Arc:</span> Arc-shaped projectiles</p>
+            <p><span class="upgrade-name">Headhunter:</span> Seeks enemies</p>
+            <p><span class="upgrade-name">Bounce:</span> Bounces 50% DMG penalty</p>
+            <p><span class="upgrade-name">Pierce:</span> Pierce through enemies</p>
+            <p><span class="upgrade-name">Critical Rate:</span> 5% per upgrade</p>
+            <p><span class="upgrade-name">Critical Damage:</span> 1.5x + 0.5x per upgrade</p>
           </div>
           <h3>Milestones</h3>
           <div class="chart-content">
-            <p><strong>Every 30:</strong> Ship upgraded +50 HP</p>
+            <p><strong>Every 50:</strong> Ship upgraded +50 HP, keep 3 permanent</p>
             <p><strong>Every 5 waves:</strong> Difficulty +</p>
+            <p><strong>Rocks:</strong> Respawn every 8 seconds</p>
           </div>
         </div>
         <div id="pause-overlay" class="pause-overlay hidden">
           <h1>PAUSED</h1>
           <p>Press ESC to resume</p>
+        </div>
+        <div id="wave-upgrade-selection" class="overlay hidden">
+          <h2>Choose an Upgrade</h2>
+          <div id="upgrade-options" class="upgrade-options"></div>
         </div>
         <canvas id="game-canvas" width="1024" height="640"></canvas>
       </section>
