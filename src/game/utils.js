@@ -22,6 +22,32 @@ export function randomCorner(width, height, margin = 20) {
   return corners[Math.floor(Math.random() * corners.length)];
 }
 
+export function randomSide(width, height, margin = 20) {
+  // Spawn on any of the 4 sides: top, bottom, left, right
+  const side = Math.floor(Math.random() * 4);
+  let x, y;
+  
+  switch(side) {
+    case 0: // Top
+      x = margin + Math.random() * (width - 2 * margin);
+      y = margin;
+      break;
+    case 1: // Bottom
+      x = margin + Math.random() * (width - 2 * margin);
+      y = height - margin;
+      break;
+    case 2: // Left
+      x = margin;
+      y = margin + Math.random() * (height - 2 * margin);
+      break;
+    case 3: // Right
+      x = width - margin;
+      y = margin + Math.random() * (height - 2 * margin);
+      break;
+  }
+  return { x, y };
+}
+
 export function loadSprite(path) {
   const image = new Image();
   image.src = path;

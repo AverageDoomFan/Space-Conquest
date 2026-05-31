@@ -28,12 +28,22 @@ export class Enemy {
     // Aura DoT tracking
     this.auraDotDuration = 0;
     this.auraDotTickTimer = 0;
+    
+    // Stun tracking
+    this.stunDuration = 0;
   }
 
   update(player, dt) {
     const dir = normalize(player.x - this.x, player.y - this.y);
-    this.x += dir.x * this.speed * dt;
-    this.y += dir.y * this.speed * dt;
+    
+    // Update stun duration
+    if (this.stunDuration > 0) {
+      this.stunDuration -= dt;
+    } else {
+      // Only move if not stunned
+      this.x += dir.x * this.speed * dt;
+      this.y += dir.y * this.speed * dt;
+    }
 
     this.shootTimer = Math.max(0, this.shootTimer - dt);
     this.secondaryTimer = Math.max(0, this.secondaryTimer - dt);
@@ -47,6 +57,10 @@ export class Enemy {
 
   takeDamage(amount) {
     this.hp -= amount;
+  }
+
+  applyStun(duration) {
+    this.stunDuration = Math.max(this.stunDuration, duration);
   }
 
   get isDead() {

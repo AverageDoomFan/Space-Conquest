@@ -5,9 +5,10 @@ import { Player } from "./entities/Player.js";
 import { Projectile } from "./entities/Projectile.js";
 import { Rock } from "./entities/Rock.js";
 import { FloatingText } from "./entities/FloatingText.js";
+import { Supernova } from "./entities/Supernova.js";
 import { Input } from "./systems/Input.js";
-import { ENEMY_TYPES, GAME_HEIGHT, GAME_WIDTH, SPRITES, UPGRADE_TYPES, WAVE_INTERVAL_MS, MAX_SPEED_UPGRADES, ROCK_RESPAWN_TIME, MAX_UPGRADES_BEFORE_RESET, PERMANENT_UPGRADE_COUNT } from "./constants.js";
-import { circleHit, loadSprite, normalize, randomCorner } from "./utils.js";
+import { ENEMY_TYPES, GAME_HEIGHT, GAME_WIDTH, SPRITES, UPGRADE_TYPES, UPGRADE_INFO, RARITY_INFO, RARITY_TYPES, RARITY_WEIGHTS, WAVE_INTERVAL_MS, MAX_SPEED_UPGRADES, ROCK_RESPAWN_TIME, BASE_XP_FOR_UPGRADE, XP_MILESTONE_GROWTH } from "./constants.js";
+import { circleHit, loadSprite, normalize, randomCorner, randomSide } from "./utils.js";
 
 export class Game {
   constructor(canvas, ui) {
@@ -33,12 +34,97 @@ export class Game {
     this.waveTimer = 0;
     this.wavesSurvived = 0;
     this.lastDifficultyWave = 0;
-    this.cumulativeUpgrades = 0;
     this.paused = false;
     this.pausedForUpgradeSelection = false;
     this.selectedShip = null;
+    this.milestonesCompleted = 0;
+    this.currentXP = 0;
+    this.xpForNextMilestone = BASE_XP_FOR_UPGRADE;
 
     this.reset();
+  }
+
+  getUpgradeInfo(upgradeKey) {
+    return UPGRADE_INFO[upgradeKey] || {
+      name: upgradeKey,
+      acronym: upgradeKey.slice(0, 2).toUpperCase(),
+      rarity: RARITY_TYPES.LEGENDARY
+    };
+  }
+
+  getRarityInfo(rarity) {
+    return RARITY_INFO[rarity] || RARITY_INFO[RARITY_TYPES.LEGENDARY];
+  }
+
+  rollRarity() {
+    const totalWeight = Object.values(RARITY_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
+    let roll = Math.random() * totalWeight;
+    for (const rarity of Object.keys(RARITY_WEIGHTS)) {
+      roll -= RARITY_WEIGHTS[rarity];
+      if (roll <= 0) {
+        return rarity;
+      }
+    }
+    return RARITY_TYPES.LEGENDARY;
+  }
+
+  formatUpgradeValue(value) {
+    const rounded = Math.round(value * 10) / 10;
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1).replace(/\.0$/, "");
+  }
+
+  buildUpgradeChoice(upgradeKey) {
+    const upgradeInfo = this.getUpgradeInfo(upgradeKey);
+    const currentValue = this.player.upgrades[upgradeKey] || 0;
+    const rarity = this.rollRarity();
+    const rarityInfo = this.getRarityInfo(rarity);
+    const amount = rarityInfo.value;
+    return {
+      key: upgradeKey,
+      name: upgradeInfo.name,
+      acronym: upgradeInfo.acronym,
+      rarity,
+      rarityColor: rarityInfo.color,
+      amount,
+      currentValue,
+      nextValue: currentValue + amount,
+      displayCurrent: this.formatUpgradeValue(currentValue),
+      displayNext: this.formatUpgradeValue(currentValue + amount),
+      displayAmount: this.formatUpgradeValue(amount)
+    };
+  }
+
+  getWholeUpgradeCount(value) {
+    const whole = Math.max(0, Math.floor(value));
+    const fractional = Math.max(0, value - whole);
+    return whole + (Math.random() < fractional ? 1 : 0);
+  }
+
+  findNearestEnemy(x, y) {
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const enemy of this.enemies) {
+      const dist = Math.hypot(enemy.x - x, enemy.y - y);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = enemy;
+      }
+    }
+    return nearest;
+  }
+
+  pickUniqueUpgrades(count, exclude = []) {
+    const pool = Object.keys(this.player.upgrades).filter((upgradeKey) => !exclude.includes(upgradeKey));
+    for (let i = pool.length - 1; i > 0; i -= 1) {
+      const swapIndex = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[swapIndex]] = [pool[swapIndex], pool[i]];
+    }
+    return pool.slice(0, Math.min(count, pool.length));
+  }
+
+  getFloorUpgradePickText(upgradeKey, amount) {
+    const upgradeInfo = this.getUpgradeInfo(upgradeKey);
+    return `+${this.formatUpgradeValue(amount)} ${upgradeInfo.acronym}`;
   }
 
   reset() {
@@ -50,9 +136,15 @@ export class Game {
     this.cubes = [];
     this.hpBoxes = [];
     this.floatingTexts = [];
+    this.supernovas = [];
     this.waveIndex = 0;
     this.waveTimer = 0;
     this.aoeRing = null;
+    this.currentXP = 0;
+    this.xpForNextMilestone = BASE_XP_FOR_UPGRADE;
+    this.milestonesCompleted = 0;
+    this.paused = false;
+    this.pausedForUpgradeSelection = false;
 
     for (let i = 0; i < 6; i += 1) {
       this.spawnRock();
@@ -139,6 +231,49 @@ export class Game {
       this.player.onShoot();
     }
 
+    // Spawn supernovas periodically if upgrade is active
+    if (this.player.upgrades.supernova > 0) {
+      const supernovaCooldown = 8 - this.player.upgrades.supernova * 0.8; // 8s base, -0.8s per upgrade
+      if (this.player.supernovaTimer >= supernovaCooldown) {
+        const supernova = new Supernova(
+          this.player.x + (Math.random() - 0.5) * 100,
+          this.player.y + (Math.random() - 0.5) * 100,
+          this.player.upgrades.supernova
+        );
+        this.supernovas.push(supernova);
+        this.player.supernovaTimer = 0;
+      }
+    }
+
+    // Update and manage supernovas
+    for (let i = this.supernovas.length - 1; i >= 0; i--) {
+      const supernova = this.supernovas[i];
+      supernova.update(dt);
+      
+      if (supernova.isDead) {
+        this.supernovas.splice(i, 1);
+        continue;
+      }
+      
+      // Supernova damage and drag to enemies
+      if (supernova.shouldDamage()) {
+        for (const enemy of this.enemies) {
+          const dist = Math.hypot(enemy.x - supernova.x, enemy.y - supernova.y);
+          if (dist < supernova.radius) {
+            // Deal damage
+            const supernovaDamage = 15 + this.player.upgrades.supernova * 5;
+            enemy.takeDamage(supernovaDamage);
+            
+            // Pull enemy towards supernova
+            const pullStrength = 120 + this.player.upgrades.supernova * 40;
+            const dir = normalize(supernova.x - enemy.x, supernova.y - enemy.y);
+            enemy.x += dir.x * pullStrength * dt;
+            enemy.y += dir.y * pullStrength * dt;
+          }
+        }
+      }
+    }
+
     for (const enemy of this.enemies) {
       enemy.update(this.player, dt);
       this.maybeEnemyAttack(enemy);
@@ -179,62 +314,53 @@ export class Game {
 
     for (const cube of this.cubes) {
       cube.update(dt);
+      if (cube.isDead) {
+        cube.picked = true;
+        continue;
+      }
+
       if (circleHit(cube, this.player)) {
-        this.player.upgrades[cube.type] += 1;
-        this.cumulativeUpgrades += 1;
+        const upgradeInfo = this.getUpgradeInfo(cube.type);
+        const rarityInfo = this.getRarityInfo(cube.rarity);
+        const upgradeAmount = rarityInfo.value;
+
+        this.player.applyTemporaryUpgrade(cube.type, upgradeAmount, 15);
+
+        // Show floating text for pickup using the short upgrade acronym and rarity color
+        this.floatingTexts.push(new FloatingText(cube.x, cube.y - 20, `+${this.formatUpgradeValue(upgradeAmount)} ${upgradeInfo.acronym}`, rarityInfo.color));
+
+        // Increment XP for upgrade pickup
+        this.currentXP += upgradeAmount;
         
-        // Show floating text for pickup
-        const upgradeNames = {
-          projectiles: "Projectiles", speed: "Speed", rate: "Rate", rows: "Rows",
-          verticalRows: "V-Rows", burst: "Burst", laser: "Laser", damage: "Damage",
-          aura: "Aura", size: "Size", random: "Random", plasma: "Plasma",
-          bomb: "Bomb", dispel: "Dispel", arc: "Arc", headhunter: "Headhunter",
-          bounce: "Bounce", pierce: "Pierce", criticalRate: "Crit Rate", criticalDamage: "Crit Dmg"
-        };
-        const upgradeColors = {
-          projectiles: "#61e0ff", speed: "#80ff7f", rate: "#ffa500", rows: "#ff80d5",
-          verticalRows: "#ff1493", burst: "#ffd700", laser: "#ffff00", damage: "#ff69b4",
-          aura: "#00ff00", size: "#ff6b00", random: "#ff00ff", plasma: "#00ffff",
-          bomb: "#ff0000", dispel: "#00ff80", arc: "#8000ff", headhunter: "#ffff00",
-          bounce: "#ff8000", pierce: "#0080ff", criticalRate: "#ff0080", criticalDamage: "#ff4000"
-        };
-        const textColor = upgradeColors[cube.type] || "#ffffff";
-        const textLabel = upgradeNames[cube.type] || cube.type;
-        this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 30, `+${textLabel}`, textColor));
-        
-        // Check for 50 upgrade milestone (stackable) for ship upgrade
-        if (this.cumulativeUpgrades % MAX_UPGRADES_BEFORE_RESET === 0) {
+        // Check for ship upgrade milestone based on XP
+        if (this.currentXP >= this.xpForNextMilestone) {
+          this.currentXP = 0;
+          this.milestonesCompleted += 1;
+          
+          // Calculate next milestone XP requirement with a much steeper scaling curve
+          this.xpForNextMilestone = Math.ceil(BASE_XP_FOR_UPGRADE * Math.pow(XP_MILESTONE_GROWTH, this.milestonesCompleted));
+          
           if (this.ui && typeof this.ui.showNotification === 'function') {
-            this.ui.showNotification("SHIP UPGRADED");
+            this.ui.showNotification("XP BONUS UNLOCKED");
           }
           
           // Increase maxhp by 50
           this.player.maxHp += 50;
           this.player.hp = this.player.maxHp;
           
-          // Determine permanent upgrades on first reset
-          if (this.player.permanentUpgrades.length === 0) {
-            const allUpgradeTypes = Object.keys(this.player.upgrades);
-            for (let i = 0; i < PERMANENT_UPGRADE_COUNT; i++) {
-              const randomUpgrade = allUpgradeTypes[Math.floor(Math.random() * allUpgradeTypes.length)];
-              if (!this.player.permanentUpgrades.includes(randomUpgrade)) {
-                this.player.permanentUpgrades.push(randomUpgrade);
-              }
-            }
-          }
-          
-          // Reset upgrades except speed and permanent upgrades
-          for (const upgradeKey of Object.keys(this.player.upgrades)) {
-            if (upgradeKey !== "speed" && !this.player.permanentUpgrades.includes(upgradeKey)) {
-              this.player.upgrades[upgradeKey] = 0;
-            }
-          }
+          // Show permanent XP bonus selection instead of resetting stats
+          this.showMilestoneUpgradeSelection();
+        }
+        
+        // Update XP bar in UI
+        if (this.ui && typeof this.ui.updateXP === 'function') {
+          this.ui.updateXP(this.currentXP, this.xpForNextMilestone);
         }
         
         cube.picked = true;
       }
     }
-    this.cubes = this.cubes.filter((cube) => !cube.picked);
+    this.cubes = this.cubes.filter((cube) => !cube.picked && !cube.isDead);
 
     for (const hpBox of this.hpBoxes) {
       hpBox.update(dt);
@@ -291,25 +417,28 @@ export class Game {
 
   resolveProjectileHits() {
     for (const projectile of this.playerProjectiles) {
-      // Update headhunter targeting
-      if (projectile.type === "headhunter" && projectile.targetEnemy) {
-        const dir = normalize(projectile.targetEnemy.x - projectile.x, projectile.targetEnemy.y - projectile.y);
-        const speed = Math.hypot(projectile.vx, projectile.vy);
-        projectile.vx = dir.x * speed;
-        projectile.vy = dir.y * speed;
-        
-        // Find new target if current is dead
-        if (projectile.targetEnemy.isDead) {
-          let nearest = null;
-          let nearestDist = Infinity;
-          for (const enemy of this.enemies) {
-            const dist = Math.hypot(enemy.x - projectile.x, enemy.y - projectile.y);
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              nearest = enemy;
+      // Update headhunter targeting (only search every 0.1s to optimize)
+      if (projectile.type === "headhunter") {
+        const liveTarget = projectile.targetEnemy && !projectile.targetEnemy.isDead ? projectile.targetEnemy : null;
+        if (!liveTarget || projectile.targetSearchTimer <= 0) {
+          const nextTarget = this.findNearestEnemy(projectile.x, projectile.y);
+          if (nextTarget) {
+            projectile.targetEnemy = nextTarget;
+            const dir = normalize(nextTarget.x - projectile.x, nextTarget.y - projectile.y);
+            const speed = Math.max(240, Math.hypot(projectile.vx, projectile.vy) || 0);
+            if (dir.x !== 0 || dir.y !== 0) {
+              projectile.vx = dir.x * speed;
+              projectile.vy = dir.y * speed;
             }
+          } else if (!projectile.vx && !projectile.vy) {
+            projectile.vy = -300;
           }
-          projectile.targetEnemy = nearest;
+
+          projectile.targetSearchTimer = 0.1;
+        }
+
+        if (projectile.targetEnemy && projectile.targetEnemy.isDead) {
+          projectile.targetEnemy = null;
         }
       }
       
@@ -345,7 +474,9 @@ export class Game {
                 type: projectile.type,
                 bounces: projectile.bounces - 1,
                 piercesLeft: projectile.piercesLeft,
-                isCritical: projectile.isCritical
+                isCritical: projectile.isCritical,
+                chainLevel: projectile.chainLevel,
+                stunLevel: projectile.stunLevel
               });
               this.playerProjectiles.push(newProj);
             }
@@ -372,6 +503,23 @@ export class Game {
             }
             
             projectile.dead = true;
+          }
+          
+          // Apply chain damage - damage neighbors if chain upgrade is active
+          if (projectile.chainLevel > 0) {
+            const chainRange = 80 + projectile.chainLevel * 40; // Range increases with upgrade
+            for (const otherEnemy of this.enemies) {
+              const dist = Math.hypot(otherEnemy.x - enemy.x, otherEnemy.y - enemy.y);
+              if (dist < chainRange && otherEnemy !== enemy) {
+                otherEnemy.takeDamage(damage * 0.6);
+              }
+            }
+          }
+          
+          // Apply stun if stun upgrade is active
+          if (projectile.stunLevel > 0) {
+            const stunDuration = 0.3 + projectile.stunLevel * 0.2; // 0.3s + 0.2s per upgrade
+            enemy.applyStun(stunDuration);
           }
           
           // Drop loot (adjusted rates based on enemy type)
@@ -442,9 +590,9 @@ export class Game {
   }
 
   shootPlayerProjectiles() {
-    const horizontalRows = 1 + this.player.upgrades.rows;
-    const verticalRows = 1 + this.player.upgrades.verticalRows;
-    const count = 1 + this.player.upgrades.projectiles;
+    const horizontalRows = 1 + this.getWholeUpgradeCount(this.player.upgrades.rows);
+    const verticalRows = 1 + this.getWholeUpgradeCount(this.player.upgrades.verticalRows);
+    const count = 1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles);
     const burstMultiplier = this.player.burstActive ? 2 : 1;
     const finalCount = Math.floor(count * burstMultiplier);
     
@@ -452,7 +600,7 @@ export class Game {
     const speed = 390 + this.player.upgrades.speed * 45;
     
     // Calculate damage multiplier based on ship upgrades
-    const shipUpgradeCount = Math.floor(this.cumulativeUpgrades / MAX_UPGRADES_BEFORE_RESET);
+    const shipUpgradeCount = this.milestonesCompleted;
     const damageMultiplier = 1 + shipUpgradeCount * 2;
     
     // Calculate projectile damage penalty (7% reduction per upgrade, resets on ship upgrade)
@@ -460,7 +608,7 @@ export class Game {
     
     // Get damage color based on damage upgrade
     const damageUpgrades = [1, 1.2, 1.5, 2, 3, 5];
-    const damageTier = Math.min(this.player.upgrades.damage, damageUpgrades.length - 1);
+    const damageTier = Math.min(this.getWholeUpgradeCount(this.player.upgrades.damage), damageUpgrades.length - 1);
     const damageScale = damageUpgrades[damageTier];
     const damageColors = ["#66c2ff", "#ffdd61", "#ff9d3d", "#ff5b5b", "#d946ef", "#ffffff"];
     const projectileColor = damageColors[damageTier];
@@ -477,7 +625,7 @@ export class Game {
     const getCriticalMultiplier = () => isCriticalHit() ? criticalDamage : 1;
     
     // Helper function to create a projectile with all attributes
-    const createProjectile = (x, y, vx, vy, radius, baseDamage, type = "normal", bounces = 0, piercesLeft = 0) => {
+    const createProjectile = (x, y, vx, vy, radius, baseDamage, type = "normal", bounces = 0, piercesLeft = 0, chainLevel = 0, stunLevel = 0) => {
       const critical = isCriticalHit();
       const critMult = critical ? criticalDamage : 1;
       return new Projectile({
@@ -488,7 +636,9 @@ export class Game {
         type,
         bounces,
         piercesLeft,
-        isCritical: critical
+        isCritical: critical,
+        chainLevel,
+        stunLevel
       });
     };
     
@@ -500,8 +650,8 @@ export class Game {
         const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
         const angle = -Math.PI / 2 + (ratio - 0.5) * totalSpread;
         
-        const piercesLeft = this.player.upgrades.pierce;
-        const bounces = this.player.upgrades.bounce;
+        const piercesLeft = this.getWholeUpgradeCount(this.player.upgrades.pierce);
+        const bounces = this.getWholeUpgradeCount(this.player.upgrades.bounce);
         
         this.playerProjectiles.push(
           createProjectile(
@@ -513,7 +663,9 @@ export class Game {
             14,
             "normal",
             bounces,
-            piercesLeft
+            piercesLeft,
+            this.player.upgrades.chain,
+            this.player.upgrades.stun
           )
         );
       }
@@ -528,8 +680,8 @@ export class Game {
         const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
         const angle = -3 * Math.PI / 4 + (ratio - 0.5) * totalSpread;
         
-        const piercesLeft = this.player.upgrades.pierce;
-        const bounces = this.player.upgrades.bounce;
+        const piercesLeft = this.getWholeUpgradeCount(this.player.upgrades.pierce);
+        const bounces = this.getWholeUpgradeCount(this.player.upgrades.bounce);
         
         this.playerProjectiles.push(
           createProjectile(
@@ -540,8 +692,10 @@ export class Game {
             baseBulletRadius * 0.8,
             14 * 0.3,
             "normal",
-            bounces,
-            piercesLeft
+              this.getWholeUpgradeCount(this.player.upgrades.bounce),
+              this.getWholeUpgradeCount(this.player.upgrades.pierce),
+            this.player.upgrades.chain,
+            this.player.upgrades.stun
           )
         );
       }
@@ -551,8 +705,8 @@ export class Game {
         const ratio = finalCount === 1 ? 0.5 : i / (finalCount - 1);
         const angle = -Math.PI / 4 + (ratio - 0.5) * totalSpread;
         
-        const piercesLeft = this.player.upgrades.pierce;
-        const bounces = this.player.upgrades.bounce;
+        const piercesLeft = this.getWholeUpgradeCount(this.player.upgrades.pierce);
+        const bounces = this.getWholeUpgradeCount(this.player.upgrades.bounce);
         
         this.playerProjectiles.push(
           createProjectile(
@@ -564,7 +718,9 @@ export class Game {
             14 * 0.3,
             "normal",
             bounces,
-            piercesLeft
+            piercesLeft,
+            this.player.upgrades.chain,
+            this.player.upgrades.stun
           )
         );
       }
@@ -574,8 +730,9 @@ export class Game {
     for (let laserRow = 0; laserRow < horizontalRows; laserRow += 1) {
       const rowOffset = horizontalRows === 1 ? 0 : (laserRow - (horizontalRows - 1) / 2) * 40;
       
-      for (let laser = 0; laser < this.player.upgrades.laser; laser += 1) {
-        const laserOffset = this.player.upgrades.laser === 1 ? 0 : (laser - (this.player.upgrades.laser - 1) / 2) * 35;
+      const laserCount = this.getWholeUpgradeCount(this.player.upgrades.laser);
+      for (let laser = 0; laser < laserCount; laser += 1) {
+        const laserOffset = laserCount === 1 ? 0 : (laser - (laserCount - 1) / 2) * 35;
         this.playerProjectiles.push(
           new Projectile({
             x: this.player.x + rowOffset + laserOffset,
@@ -594,8 +751,9 @@ export class Game {
     }
     
     // Random weapon - high rate, tiny projectiles affected by projectile upgrade and rows
-    if (this.player.upgrades.random > 0) {
-      const randomProjectiles = 5 + this.player.upgrades.random * 3 + (1 + this.player.upgrades.projectiles) * 2;
+    const randomCount = this.getWholeUpgradeCount(this.player.upgrades.random);
+    if (randomCount > 0) {
+      const randomProjectiles = 5 + randomCount * 3 + (1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles)) * 2;
       for (let i = 0; i < randomProjectiles; i++) {
         const angle = Math.random() * Math.PI * 2;
         const randomSpeed = 250 + Math.random() * 150;
@@ -612,7 +770,11 @@ export class Game {
               Math.sin(angle) * randomSpeed,
               2 + this.player.upgrades.size * 0.5,
               3,
-              "random"
+              "random",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -631,7 +793,11 @@ export class Game {
               Math.sin(vAngle) * vSpeed,
               2 + this.player.upgrades.size * 0.5,
               3 * 0.3,
-              "random"
+              "random",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -639,9 +805,10 @@ export class Game {
     }
     
     // Plasma weapon - big slow circles with DoT, affected by projectile upgrade
-    if (this.player.upgrades.plasma > 0) {
-      const plasmaCount = 1 + this.player.upgrades.plasma + (1 + this.player.upgrades.projectiles);
-      for (let p = 0; p < plasmaCount; p++) {
+    const plasmaCount = this.getWholeUpgradeCount(this.player.upgrades.plasma);
+    if (plasmaCount > 0) {
+      const plasmaProjectileCount = 1 + plasmaCount + (1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles));
+      for (let p = 0; p < plasmaProjectileCount; p++) {
         // Horizontal rows
         for (let row = 0; row < horizontalRows; row++) {
           const rowOffset = horizontalRows === 1 ? 0 : (row - (horizontalRows - 1) / 2) * 25;
@@ -658,12 +825,14 @@ export class Game {
               8,
               "plasma",
               0,
-              0
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
         
-        // Vertical rows
+        // Vertical rows - LEFT side
         for (let col = 0; col < verticalRows; col++) {
           const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
           const spread = plasmaCount === 1 ? 0 : (p - (plasmaCount - 1) / 2) * 0.3;
@@ -679,7 +848,32 @@ export class Game {
               8 * 0.3,
               "plasma",
               0,
-              0
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
+            )
+          );
+        }
+        
+        // Vertical rows - RIGHT side
+        for (let col = 0; col < verticalRows; col++) {
+          const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
+          const spread = plasmaCount === 1 ? 0 : (p - (plasmaCount - 1) / 2) * 0.3;
+          const angle = -Math.PI / 4 + spread;
+          
+          this.playerProjectiles.push(
+            createProjectile(
+              this.player.x + this.player.radius + colOffset,
+              this.player.y,
+              Math.cos(angle) * 150,
+              Math.sin(angle) * 150,
+              (12 + this.player.upgrades.size * 2) * 0.8,
+              8 * 0.3,
+              "plasma",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -687,9 +881,10 @@ export class Game {
     }
     
     // Bomb weapon - explodes on contact, affected by projectile upgrade
-    if (this.player.upgrades.bomb > 0) {
-      const bombCount = 1 + this.player.upgrades.bomb + (1 + this.player.upgrades.projectiles);
-      for (let b = 0; b < bombCount; b++) {
+    const bombCount = this.getWholeUpgradeCount(this.player.upgrades.bomb);
+    if (bombCount > 0) {
+      const bombProjectileCount = 1 + bombCount + (1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles));
+      for (let b = 0; b < bombProjectileCount; b++) {
         // Horizontal rows
         for (let row = 0; row < horizontalRows; row++) {
           const rowOffset = horizontalRows === 1 ? 0 : (row - (horizontalRows - 1) / 2) * 25;
@@ -704,12 +899,39 @@ export class Game {
               Math.sin(angle) * 200,
               10 + this.player.upgrades.size * 1.5,
               15,
-              "bomb"
+              "bomb",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
         
-        // Vertical rows
+        // Vertical rows - LEFT side
+        for (let col = 0; col < verticalRows; col++) {
+          const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
+          const spread = bombCount === 1 ? 0 : (b - (bombCount - 1) / 2) * 0.2;
+          const angle = -3 * Math.PI / 4 + spread;
+          
+          this.playerProjectiles.push(
+            createProjectile(
+              this.player.x - this.player.radius + colOffset,
+              this.player.y,
+              Math.cos(angle) * 200,
+              Math.sin(angle) * 200,
+              (10 + this.player.upgrades.size * 1.5) * 0.8,
+              15 * 0.3,
+              "bomb",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
+            )
+          );
+        }
+        
+        // Vertical rows - RIGHT side
         for (let col = 0; col < verticalRows; col++) {
           const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
           const spread = bombCount === 1 ? 0 : (b - (bombCount - 1) / 2) * 0.2;
@@ -723,7 +945,11 @@ export class Game {
               Math.sin(angle) * 200,
               (10 + this.player.upgrades.size * 1.5) * 0.8,
               15 * 0.3,
-              "bomb"
+              "bomb",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -731,9 +957,10 @@ export class Game {
     }
     
     // Dispel weapon - low damage/speed projectiles that dispel enemy projectiles, affected by projectile upgrade
-    if (this.player.upgrades.dispel > 0) {
-      const dispelCount = 2 + this.player.upgrades.dispel * 2 + (1 + this.player.upgrades.projectiles);
-      for (let d = 0; d < dispelCount; d++) {
+    const dispelCount = this.getWholeUpgradeCount(this.player.upgrades.dispel);
+    if (dispelCount > 0) {
+      const dispelProjectileCount = 2 + dispelCount * 2 + (1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles));
+      for (let d = 0; d < dispelProjectileCount; d++) {
         // Horizontal rows
         for (let row = 0; row < horizontalRows; row++) {
           const rowOffset = horizontalRows === 1 ? 0 : (row - (horizontalRows - 1) / 2) * 25;
@@ -753,7 +980,7 @@ export class Game {
           );
         }
         
-        // Vertical rows
+        // Vertical rows - LEFT side
         for (let col = 0; col < verticalRows; col++) {
           const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
           const spread = (d - (dispelCount - 1) / 2) * (Math.PI / 12);
@@ -767,7 +994,34 @@ export class Game {
               Math.sin(angle) * 100,
               3.2,
               2 * 0.3,
-              "dispel"
+              "dispel",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
+            )
+          );
+        }
+        
+        // Vertical rows - RIGHT side
+        for (let col = 0; col < verticalRows; col++) {
+          const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
+          const spread = (d - (dispelCount - 1) / 2) * (Math.PI / 12);
+          const angle = -Math.PI / 4 + spread;
+          
+          this.playerProjectiles.push(
+            createProjectile(
+              this.player.x + this.player.radius + colOffset,
+              this.player.y,
+              Math.cos(angle) * 100,
+              Math.sin(angle) * 100,
+              3.2,
+              2 * 0.3,
+              "dispel",
+              0,
+              0,
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -775,9 +1029,10 @@ export class Game {
     }
     
     // Arc weapon - projectiles in arc shape, affected by projectile upgrade
-    if (this.player.upgrades.arc > 0) {
-      const arcCount = 1 + this.player.upgrades.arc + (1 + this.player.upgrades.projectiles);
-      for (let a = 0; a < arcCount; a++) {
+    const arcCount = this.getWholeUpgradeCount(this.player.upgrades.arc);
+    if (arcCount > 0) {
+      const arcProjectileCount = 1 + arcCount + (1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles));
+      for (let a = 0; a < arcProjectileCount; a++) {
         // Horizontal rows
         for (let row = 0; row < horizontalRows; row++) {
           const rowOffset = horizontalRows === 1 ? 0 : (row - (horizontalRows - 1) / 2) * 25;
@@ -793,8 +1048,10 @@ export class Game {
               6 + this.player.upgrades.size,
               12,
               "arc",
-              this.player.upgrades.bounce,
-              this.player.upgrades.pierce
+              this.getWholeUpgradeCount(this.player.upgrades.bounce),
+              this.getWholeUpgradeCount(this.player.upgrades.pierce),
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -814,8 +1071,10 @@ export class Game {
               (6 + this.player.upgrades.size) * 0.8,
               12 * 0.3,
               "arc",
-              this.player.upgrades.bounce,
-              this.player.upgrades.pierce
+              this.getWholeUpgradeCount(this.player.upgrades.bounce),
+              this.getWholeUpgradeCount(this.player.upgrades.pierce),
+              this.player.upgrades.chain,
+              this.player.upgrades.stun
             )
           );
         }
@@ -823,9 +1082,10 @@ export class Game {
     }
     
     // Headhunter weapon - seeks enemies, affected by projectile upgrade
-    if (this.player.upgrades.headhunter > 0) {
-      const hunterCount = 1 + this.player.upgrades.headhunter + (1 + this.player.upgrades.projectiles);
-      for (let h = 0; h < hunterCount; h++) {
+    const hunterCount = this.getWholeUpgradeCount(this.player.upgrades.headhunter);
+    if (hunterCount > 0) {
+      const hunterProjectileCount = 1 + hunterCount + (1 + this.getWholeUpgradeCount(this.player.upgrades.projectiles));
+      for (let h = 0; h < hunterProjectileCount; h++) {
         // Horizontal rows
         for (let row = 0; row < horizontalRows; row++) {
           const rowOffset = horizontalRows === 1 ? 0 : (row - (horizontalRows - 1) / 2) * 25;
@@ -838,25 +1098,41 @@ export class Game {
             5 + this.player.upgrades.size * 0.8,
             10,
             "headhunter",
-            this.player.upgrades.bounce,
-            this.player.upgrades.pierce
+            this.getWholeUpgradeCount(this.player.upgrades.bounce),
+            this.getWholeUpgradeCount(this.player.upgrades.pierce),
+            this.player.upgrades.chain,
+            this.player.upgrades.stun
           );
           
           // Find nearest enemy
-          let nearest = null;
-          let nearestDist = Infinity;
-          for (const enemy of this.enemies) {
-            const dist = Math.hypot(enemy.x - proj.x, enemy.y - proj.y);
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              nearest = enemy;
-            }
-          }
-          proj.targetEnemy = nearest;
+          proj.targetEnemy = this.findNearestEnemy(proj.x, proj.y);
           this.playerProjectiles.push(proj);
         }
         
-        // Vertical rows
+        // Vertical rows - LEFT side
+        for (let col = 0; col < verticalRows; col++) {
+          const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
+          
+          const proj = createProjectile(
+            this.player.x - this.player.radius + colOffset,
+            this.player.y,
+            300,
+            0,
+            4 + this.player.upgrades.size * 0.64,
+            10 * 0.3,
+            "headhunter",
+            this.getWholeUpgradeCount(this.player.upgrades.bounce),
+            this.getWholeUpgradeCount(this.player.upgrades.pierce),
+            this.player.upgrades.chain,
+            this.player.upgrades.stun
+          );
+          
+          // Find nearest enemy
+          proj.targetEnemy = this.findNearestEnemy(proj.x, proj.y);
+          this.playerProjectiles.push(proj);
+        }
+        
+        // Vertical rows - RIGHT side
         for (let col = 0; col < verticalRows; col++) {
           const colOffset = verticalRows === 1 ? 0 : (col - (verticalRows - 1) / 2) * 25;
           
@@ -868,21 +1144,14 @@ export class Game {
             4 + this.player.upgrades.size * 0.64,
             10 * 0.3,
             "headhunter",
-            this.player.upgrades.bounce,
-            this.player.upgrades.pierce
+            this.getWholeUpgradeCount(this.player.upgrades.bounce),
+            this.getWholeUpgradeCount(this.player.upgrades.pierce),
+            this.player.upgrades.chain,
+            this.player.upgrades.stun
           );
           
           // Find nearest enemy
-          let nearest = null;
-          let nearestDist = Infinity;
-          for (const enemy of this.enemies) {
-            const dist = Math.hypot(enemy.x - proj.x, enemy.y - proj.y);
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              nearest = enemy;
-            }
-          }
-          proj.targetEnemy = nearest;
+          proj.targetEnemy = this.findNearestEnemy(proj.x, proj.y);
           this.playerProjectiles.push(proj);
         }
       }
@@ -979,31 +1248,11 @@ export class Game {
   }
 
   showUpgradeSelection() {
-    // Get 3 random upgrades
-    const allUpgrades = Object.keys(this.player.upgrades).filter(key => key !== "speed");
-    const selectedUpgrades = [];
-    
-    for (let i = 0; i < 3; i++) {
-      const randomUpgrade = allUpgrades[Math.floor(Math.random() * allUpgrades.length)];
-      selectedUpgrades.push(randomUpgrade);
-    }
-    
-    const upgradeNames = {
-      projectiles: "Projectiles", rate: "Rate", rows: "Rows",
-      verticalRows: "V-Rows", burst: "Burst", laser: "Laser", damage: "Damage",
-      aura: "Aura", size: "Size", random: "Random", plasma: "Plasma",
-      bomb: "Bomb", dispel: "Dispel", arc: "Arc", headhunter: "Headhunter",
-      bounce: "Bounce", pierce: "Pierce", criticalRate: "Crit Rate", criticalDamage: "Crit Dmg"
-    };
-    
-    const options = selectedUpgrades.map(upgrade => ({
-      name: upgradeNames[upgrade] || upgrade,
-      key: upgrade
-    }));
+    const options = this.pickUniqueUpgrades(3, ["speed"]).map((upgradeKey) => this.buildUpgradeChoice(upgradeKey));
     
     this.ui.showWaveUpgradeSelection(options, (selected) => {
       // Apply the selected upgrade permanently
-      this.player.upgrades[selected.key] += 1;
+      this.player.upgrades[selected.key] += selected.amount || 1;
       if (!this.player.permanentUpgrades.includes(selected.key)) {
         this.player.permanentUpgrades.push(selected.key);
       }
@@ -1016,10 +1265,30 @@ export class Game {
     });
   }
 
+  showMilestoneUpgradeSelection() {
+    const options = this.pickUniqueUpgrades(3, ["speed"]).map((upgradeKey) => this.buildUpgradeChoice(upgradeKey));
+    
+    this.pausedForUpgradeSelection = true;
+    this.paused = true;
+    if (this.ui && typeof this.ui.setPaused === "function") {
+      this.ui.setPaused(true);
+    }
+
+    this.ui.showWaveUpgradeSelection(options, (selected) => {
+      this.player.upgrades[selected.key] += selected.amount || 1;
+
+      this.pausedForUpgradeSelection = false;
+      this.paused = false;
+      if (this.ui && typeof this.ui.setPaused === "function") {
+        this.ui.setPaused(false);
+      }
+    });
+  }
+
   doSpawnWaveEnemies() {
     const baseMultiplier = 1 + Math.floor(this.waveIndex / 3) * 0.5;
-    const basics = Math.floor((3 + this.waveIndex) * baseMultiplier);
-    const tanks = Math.floor((1 + Math.floor(this.waveIndex / 2)) * baseMultiplier);
+    const basics = Math.floor((5 + this.waveIndex * 1.2) * baseMultiplier); // Increased from 3
+    const tanks = Math.floor((2 + Math.floor(this.waveIndex / 1.5)) * baseMultiplier); // Increased from 1
     const shooters = Math.floor((1 + Math.floor(this.waveIndex / 3)) * baseMultiplier);
 
     for (let i = 0; i < basics; i += 1) this.spawnEnemy(ENEMY_TYPES.BASIC);
@@ -1040,8 +1309,8 @@ export class Game {
   }
 
   spawnEnemy(type) {
-    const corner = randomCorner(this.canvas.width, this.canvas.height);
-    const enemy = new Enemy(type, corner.x, corner.y, this.sprites[type]);
+    const spawnLocation = randomSide(this.canvas.width, this.canvas.height);
+    const enemy = new Enemy(type, spawnLocation.x, spawnLocation.y, this.sprites[type]);
     
     // Increase enemy HP based on wave
     let hpMultiplier = 1 + (this.waveIndex - 1) * 0.15;
@@ -1072,7 +1341,9 @@ export class Game {
       UPGRADE_TYPES.BOUNCE, UPGRADE_TYPES.PIERCE, UPGRADE_TYPES.CRITICAL_RATE, UPGRADE_TYPES.CRITICAL_DAMAGE
     ];
     const type = pool[Math.floor(Math.random() * pool.length)];
-    this.cubes.push(new Cube(x, y, type));
+    const upgradeInfo = this.getUpgradeInfo(type);
+    const rarity = this.rollRarity();
+    this.cubes.push(new Cube(x, y, type, rarity, upgradeInfo.acronym));
   }
 
   spawnHPBox(x, y) {
@@ -1114,79 +1385,124 @@ export class Game {
     
     for (const enemy of this.enemies) this.drawSprite(enemy);
 
+    // Batch render projectiles by type for better performance
+    const canvasW = this.canvas.width;
+    const canvasH = this.canvas.height;
+    const renderMargin = 50;
+
+    // Group projectiles by type for batched rendering
+    const laserProjs = [];
+    const bombProjs = [];
+    const dispelProjs = [];
+    const arcProjs = [];
+    const randomProjs = [];
+    const headhunterProjs = [];
+    const normalProjs = [];
+
     for (const p of this.playerProjectiles) {
-      this.ctx.fillStyle = p.color || "#66c2ff";
-      this.ctx.strokeStyle = p.color || "#66c2ff";
-      
-      if (p.isLaser) {
-        // Draw lasers as glowing rectangles
-        this.ctx.shadowColor = p.color || "#ffff00";
-        this.ctx.shadowBlur = 10;
-        this.ctx.fillRect(p.x - p.radius, p.y - 15, p.radius * 2, 30);
-        this.ctx.shadowBlur = 0;
-      } else if (p.type === "bomb") {
-        // Draw bombs as squares
-        this.ctx.save();
-        this.ctx.translate(p.x, p.y);
-        this.ctx.rotate(p.isCritical ? Math.PI / 4 : 0);
-        this.ctx.fillRect(-p.radius, -p.radius, p.radius * 2, p.radius * 2);
-        this.ctx.restore();
-      } else if (p.type === "dispel") {
-        // Draw dispel as crosses (X shape)
-        this.ctx.beginPath();
-        this.ctx.moveTo(p.x - p.radius, p.y - p.radius);
-        this.ctx.lineTo(p.x + p.radius, p.y + p.radius);
-        this.ctx.moveTo(p.x + p.radius, p.y - p.radius);
-        this.ctx.lineTo(p.x - p.radius, p.y + p.radius);
-        this.ctx.lineWidth = 2;
-        this.ctx.stroke();
-      } else if (p.type === "arc") {
-        // Draw arc as triangles
-        this.ctx.save();
-        this.ctx.translate(p.x, p.y);
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, -p.radius);
-        this.ctx.lineTo(p.radius, p.radius);
-        this.ctx.lineTo(-p.radius, p.radius);
-        this.ctx.closePath();
-        this.ctx.fill();
-        this.ctx.restore();
-      } else if (p.type === "random") {
-        // Draw random as small crosses
-        this.ctx.beginPath();
-        this.ctx.moveTo(p.x - p.radius, p.y);
-        this.ctx.lineTo(p.x + p.radius, p.y);
-        this.ctx.moveTo(p.x, p.y - p.radius);
-        this.ctx.lineTo(p.x, p.y + p.radius);
-        this.ctx.lineWidth = 1.5;
-        this.ctx.stroke();
-      } else if (p.type === "headhunter") {
-        // Draw headhunter as diamonds/stars
-        this.ctx.save();
-        this.ctx.translate(p.x, p.y);
-        this.ctx.beginPath();
-        this.ctx.moveTo(0, -p.radius);
-        this.ctx.lineTo(p.radius * 0.7, -p.radius * 0.3);
-        this.ctx.lineTo(p.radius, 0);
-        this.ctx.lineTo(p.radius * 0.7, p.radius * 0.3);
-        this.ctx.lineTo(0, p.radius);
-        this.ctx.lineTo(-p.radius * 0.7, p.radius * 0.3);
-        this.ctx.lineTo(-p.radius, 0);
-        this.ctx.lineTo(-p.radius * 0.7, -p.radius * 0.3);
-        this.ctx.closePath();
-        this.ctx.fill();
-        this.ctx.restore();
-      } else {
-        // Default: draw as circles (normal, plasma)
-        this.ctx.beginPath();
-        this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-        this.ctx.fill();
+      // Cull offscreen projectiles
+      if (p.x < -renderMargin || p.y < -renderMargin || p.x > canvasW + renderMargin || p.y > canvasH + renderMargin) {
+        continue;
       }
-      
-      // Draw critical hit glow if applicable
+
+      if (p.isLaser) laserProjs.push(p);
+      else if (p.type === "bomb") bombProjs.push(p);
+      else if (p.type === "dispel") dispelProjs.push(p);
+      else if (p.type === "arc") arcProjs.push(p);
+      else if (p.type === "random") randomProjs.push(p);
+      else if (p.type === "headhunter") headhunterProjs.push(p);
+      else normalProjs.push(p);
+    }
+
+    // Render lasers with reduced shadow
+    for (const p of laserProjs) {
+      this.ctx.fillStyle = p.color || "#ffff00";
+      this.ctx.shadowColor = p.color || "#ffff00";
+      this.ctx.shadowBlur = 5;
+      this.ctx.fillRect(p.x - p.radius, p.y - 15, p.radius * 2, 30);
+    }
+    this.ctx.shadowBlur = 0;
+
+    // Render bombs
+    for (const p of bombProjs) {
+      this.ctx.fillStyle = p.color || "#66c2ff";
+      this.ctx.save();
+      this.ctx.translate(p.x, p.y);
+      if (p.isCritical) this.ctx.rotate(Math.PI / 4);
+      this.ctx.fillRect(-p.radius, -p.radius, p.radius * 2, p.radius * 2);
+      this.ctx.restore();
+    }
+
+    // Render dispel (crosses)
+    this.ctx.strokeStyle = "#00ff80";
+    this.ctx.lineWidth = 2;
+    for (const p of dispelProjs) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(p.x - p.radius, p.y - p.radius);
+      this.ctx.lineTo(p.x + p.radius, p.y + p.radius);
+      this.ctx.moveTo(p.x + p.radius, p.y - p.radius);
+      this.ctx.lineTo(p.x - p.radius, p.y + p.radius);
+      this.ctx.stroke();
+    }
+
+    // Render arcs
+    for (const p of arcProjs) {
+      this.ctx.fillStyle = p.color || "#66c2ff";
+      this.ctx.save();
+      this.ctx.translate(p.x, p.y);
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, -p.radius);
+      this.ctx.lineTo(p.radius, p.radius);
+      this.ctx.lineTo(-p.radius, p.radius);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.restore();
+    }
+
+    // Render random (small crosses)
+    this.ctx.strokeStyle = "#ff00ff";
+    this.ctx.lineWidth = 1.5;
+    for (const p of randomProjs) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(p.x - p.radius, p.y);
+      this.ctx.lineTo(p.x + p.radius, p.y);
+      this.ctx.moveTo(p.x, p.y - p.radius);
+      this.ctx.lineTo(p.x, p.y + p.radius);
+      this.ctx.stroke();
+    }
+
+    // Render headhunter (diamonds)
+    for (const p of headhunterProjs) {
+      this.ctx.fillStyle = p.color || "#66c2ff";
+      this.ctx.save();
+      this.ctx.translate(p.x, p.y);
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, -p.radius);
+      this.ctx.lineTo(p.radius * 0.7, -p.radius * 0.3);
+      this.ctx.lineTo(p.radius, 0);
+      this.ctx.lineTo(p.radius * 0.7, p.radius * 0.3);
+      this.ctx.lineTo(0, p.radius);
+      this.ctx.lineTo(-p.radius * 0.7, p.radius * 0.3);
+      this.ctx.lineTo(-p.radius, 0);
+      this.ctx.lineTo(-p.radius * 0.7, -p.radius * 0.3);
+      this.ctx.closePath();
+      this.ctx.fill();
+      this.ctx.restore();
+    }
+
+    // Render normal projectiles (circles - plasma & default)
+    for (const p of normalProjs) {
+      this.ctx.fillStyle = p.color || "#66c2ff";
+      this.ctx.beginPath();
+      this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      this.ctx.fill();
+    }
+
+    // Render critical hit glows
+    this.ctx.strokeStyle = "#ff00ff";
+    this.ctx.lineWidth = 1;
+    for (const p of [...laserProjs, ...bombProjs, ...arcProjs, ...headhunterProjs, ...normalProjs]) {
       if (p.isCritical) {
-        this.ctx.strokeStyle = "#ff00ff";
-        this.ctx.lineWidth = 1;
         this.ctx.beginPath();
         this.ctx.arc(p.x, p.y, p.radius + 2, 0, Math.PI * 2);
         this.ctx.stroke();
@@ -1195,38 +1511,29 @@ export class Game {
 
     this.ctx.fillStyle = "#ff5b6e";
     for (const p of this.enemyProjectiles) {
-      this.ctx.beginPath();
-      this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      this.ctx.fill();
+      // Cull offscreen
+      if (p.x >= -renderMargin && p.y >= -renderMargin && p.x <= canvasW + renderMargin && p.y <= canvasH + renderMargin) {
+        this.ctx.beginPath();
+        this.ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        this.ctx.fill();
+      }
     }
 
     for (const cube of this.cubes) {
       this.ctx.save();
       this.ctx.translate(cube.x, cube.y);
       this.ctx.rotate(cube.spin);
-      let color = "#ffd561";
-      if (cube.type === UPGRADE_TYPES.PROJECTILES) color = "#61e0ff";
-      else if (cube.type === UPGRADE_TYPES.SPEED) color = "#80ff7f";
-      else if (cube.type === UPGRADE_TYPES.ROWS) color = "#ff80d5";
-      else if (cube.type === UPGRADE_TYPES.RATE) color = "#ffa500";
-      else if (cube.type === UPGRADE_TYPES.VERTICAL_ROWS) color = "#ff1493";
-      else if (cube.type === UPGRADE_TYPES.BURST) color = "#ffd700";
-      else if (cube.type === UPGRADE_TYPES.LASER) color = "#ffff00";
-      else if (cube.type === UPGRADE_TYPES.DAMAGE) color = "#ff69b4";
-      else if (cube.type === UPGRADE_TYPES.AURA) color = "#00ff00";
-      else if (cube.type === UPGRADE_TYPES.SIZE) color = "#ff6b00";
-      else if (cube.type === UPGRADE_TYPES.RANDOM) color = "#ff00ff";
-      else if (cube.type === UPGRADE_TYPES.PLASMA) color = "#00ffff";
-      else if (cube.type === UPGRADE_TYPES.BOMB) color = "#ff0000";
-      else if (cube.type === UPGRADE_TYPES.DISPEL) color = "#00ff80";
-      else if (cube.type === UPGRADE_TYPES.ARC) color = "#8000ff";
-      else if (cube.type === UPGRADE_TYPES.HEADHUNTER) color = "#ffff00";
-      else if (cube.type === UPGRADE_TYPES.BOUNCE) color = "#ff8000";
-      else if (cube.type === UPGRADE_TYPES.PIERCE) color = "#0080ff";
-      else if (cube.type === UPGRADE_TYPES.CRITICAL_RATE) color = "#ff0080";
-      else if (cube.type === UPGRADE_TYPES.CRITICAL_DAMAGE) color = "#ff4000";
-      this.ctx.fillStyle = color;
+      const cubeRarity = this.getRarityInfo(cube.rarity);
+      const label = cube.acronym || this.getUpgradeInfo(cube.type).acronym;
+
+      this.ctx.fillStyle = cubeRarity.color;
       this.ctx.fillRect(-cube.radius, -cube.radius, cube.radius * 2, cube.radius * 2);
+      this.ctx.rotate(-cube.spin);
+      this.ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+      this.ctx.font = "bold 11px Arial";
+      this.ctx.textAlign = "center";
+      this.ctx.textBaseline = "bottom";
+      this.ctx.fillText(label, 0, -cube.radius - 4);
       this.ctx.restore();
     }
 
@@ -1245,6 +1552,30 @@ export class Game {
       this.ctx.beginPath();
       this.ctx.arc(this.aoeRing.x, this.aoeRing.y, this.aoeRing.radius, 0, Math.PI * 2);
       this.ctx.stroke();
+    }
+
+    // Draw supernovas
+    for (const supernova of this.supernovas) {
+      const progress = supernova.elapsed / supernova.ttl; // 0 to 1
+      const opacity = Math.max(0, 1 - progress); // Fade out
+      
+      // Draw outer glow
+      this.ctx.fillStyle = `rgba(255, 150, 0, ${0.3 * opacity})`;
+      this.ctx.beginPath();
+      this.ctx.arc(supernova.x, supernova.y, supernova.radius * 1.2, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Draw main circle
+      this.ctx.fillStyle = `rgba(255, 200, 0, ${0.6 * opacity})`;
+      this.ctx.beginPath();
+      this.ctx.arc(supernova.x, supernova.y, supernova.radius * 0.8, 0, Math.PI * 2);
+      this.ctx.fill();
+      
+      // Draw bright center
+      this.ctx.fillStyle = `rgba(255, 255, 100, ${opacity})`;
+      this.ctx.beginPath();
+      this.ctx.arc(supernova.x, supernova.y, supernova.radius * 0.4, 0, Math.PI * 2);
+      this.ctx.fill();
     }
 
     // Draw floating texts

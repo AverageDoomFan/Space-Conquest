@@ -11,6 +11,8 @@ const backToMenu = document.getElementById("back-to-menu");
 
 const hpBar = document.getElementById("hp-bar");
 const hpText = document.getElementById("hp-text");
+const xpBar = document.getElementById("xp-bar");
+const xpText = document.getElementById("xp-text");
 const waveCounter = document.getElementById("wave-counter");
 const notification = document.getElementById("notification");
 const pauseOverlay = document.getElementById("pause-overlay");
@@ -19,6 +21,11 @@ const upgradeOptions = document.getElementById("upgrade-options");
 const canvas = document.getElementById("game-canvas");
 
 const scoreKey = "space-conquest-previous-score";
+
+function formatUpgradeValue(value) {
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1).replace(/\.0$/, "");
+}
 
 // Ship definitions with their bonuses
 const SHIPS = [
@@ -100,6 +107,11 @@ const game = new Game(canvas, {
     hpBar.style.width = `${pct}%`;
     hpText.textContent = `${Math.ceil(current)} / ${max}`;
   },
+  updateXP(current, max) {
+    const pct = Math.max(0, Math.min(100, (current / max) * 100));
+    xpBar.style.width = `${pct}%`;
+    xpText.textContent = `${current} / ${max}`;
+  },
   updateWave(wave) {
     waveCounter.textContent = `Wave: ${wave}`;
   },
@@ -126,7 +138,11 @@ const game = new Game(canvas, {
     options.forEach((option) => {
       const button = document.createElement("button");
       button.className = "upgrade-option";
-      button.textContent = option.name;
+      button.style.backgroundColor = option.rarityColor || "#ff6b9d";
+      button.style.borderColor = option.rarityColor || "#ff9db5";
+      const currentValue = formatUpgradeValue(option.currentValue ?? 0);
+      const nextValue = formatUpgradeValue(option.nextValue ?? option.amount ?? 0);
+      button.innerHTML = `<div class="upgrade-acronym">${option.acronym || option.name}</div><div class="upgrade-name">${option.name} ${currentValue} -> ${nextValue}</div>`;
       button.addEventListener("click", () => {
         callback(option);
         waveUpgradeSelection.classList.add("hidden");
